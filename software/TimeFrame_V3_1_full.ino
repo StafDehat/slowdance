@@ -13,7 +13,7 @@
 // - Additional analog input to control electromagnet duty
 // - Adjustments to ranges
 // * Instructable available here: http://www.instructables.com/member/SparkItUp/
-// * Source code available here: https://github.com/paulh-rnd/
+// * Source code available here: https://github.com/paulh-rnd/timeframe
 
 //    This program is free software: you can redistribute it and/or modify
 //    it under the terms of the GNU General Public License as published by
