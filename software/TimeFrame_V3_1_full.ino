@@ -1,9 +1,19 @@
-// TimeFrame V3.1 - simple version
-// Copyright (C) 2016 Cubc-Print
+// TimeFrame V3.1 (modified)
+// Copyright (C) 2016 Cubic-Print
+// 
 
-// get the latest source core here: http://www.github.com/cubic-print/timeframe
-// video: http://youtu.be/LlGywKkifcI
-// order your DIY kit here: http://www.cubic-print.com/TimeFrame
+// Original source core here: http://www.github.com/cubic-print/timeframe
+// Original video: http://youtu.be/LlGywKkifcI
+// Order your DIY kit here: http://www.cubic-print.com/TimeFrame
+
+// Modifications by Paul Hutchison, Dec 2016:
+// - Glowing LED for pushbutton
+// - Frame starts in "off" mode
+// - Removed LED only mode
+// - Additional analog input to control electromagnet duty
+// - Adjustments to ranges
+// * Instructable available here: http://www.instructables.com/member/SparkItUp/
+// * Source code available here: https://github.com/paulh-rnd/
 
 //    This program is free software: you can redistribute it and/or modify
 //    it under the terms of the GNU General Public License as published by
@@ -23,20 +33,27 @@
 //Tactile Switch needs to be pressed longer in debug mode to change mode
 
 //Base frequency and trimmer Ranges
-#define BASE_FREQ 80.0 //80 in on the spot for many flowers. Feel free to play with this +/-5Hz
-#define MIN_PHASE_SHIFT 0.1
-#define MAX_PHASE_SHIFT 5.0
-#define MIN_BRIGHTNESS 2 //if too low the movement will be only visible in darker rooms
-#define MAX_BRIGHTNESS 10.0 //with high settings flickering will occur
+#define BASE_FREQ 80.0 //80 is on the spot for many flowers. Feel free to play with this +/-5Hz
+#define MIN_PHASE_SHIFT 0.25
+#define MAX_PHASE_SHIFT 2.0
+#define MIN_BRIGHTNESS 0.0 // allows light to be off to reveal the full oscillating effect
+#define MAX_BRIGHTNESS 20.0 // too high and flickering will occur
+#define MIN_STRENGTH 5.0 //  too low no movement
+#define MAX_STRENGTH 25.0 // too high and magnet will overheat
   
+#define ledPin 10
+#define oscPin 3
+#define pbLedPin 5
+#define pbInputPin 6
+
+  const float pbLedMaxDuty = 64.0;
   const int LED = 13; //on board LED
-  const int SW = 6; //button for mode selection
   int mode_changed = 1;
-  int mode = 1; //toggelt by SW button
+  int mode = 3; //toggelt by SW button, start OFF
+  bool pbReleased = true;
   //mode 1 = normal slow motion mode (power on)
   //mode 2 = distorted reality mode
-  //mode 3 = magnet off
-  //mode 4 = completely off
+  //mode 3 = off
   
   float phase_shift = 0.1; //eg. f=0.5 -> T=2 -> 2 seconds per slow motion cycle
 
@@ -49,7 +66,7 @@
 
   //Timer 1 for LED 
   //Prescaler = 8 = CS010 = 0.5 us/tick
-  //PIN 10
+  //PIN 9
   float duty_led = 7;
   float frequency_led = frequency_mag+phase_shift; 
   long time_led = round(16000000/8/frequency_led);
@@ -61,19 +78,21 @@ void setup() {
   }
 
   pinMode(LED, OUTPUT); //Heart Beat LED
-  pinMode(SW, INPUT); //button pin
-  pinMode(3, OUTPUT); //MAG: Timer 2B cycle output
-  pinMode(10, OUTPUT); //LED: Timer 1B cycle output 
+  pinMode(LED, OUTPUT); //Power button LED (pulsates slowly when off)
+  pinMode(pbInputPin, INPUT); //button pin
+  pinMode(A1, INPUT); // beat frequency
+  pinMode(oscPin, OUTPUT); //MAG: Timer 2B cycle output
+  pinMode(ledPin, OUTPUT); //LED: Timer 1B cycle output 
 
   #ifdef DEBUG
-    pinMode(11, OUTPUT); //Timer 2A half frequency at 50% duty output for debugging halbe frequenz! 50% duty
-    pinMode(9, OUTPUT); //Timer 1A half frequency at 50% duty output for debuggin
+    pinMode(9, OUTPUT); //Timer 2A half frequency at 50% duty output for debugging halbe frequenz! 50% duty
+    pinMode(11, OUTPUT); //Timer 1A half frequency at 50% duty output for debuggin
   #endif
 
-  mag_on();
+  mag_off();
   OCR2A = round(time_mag); //Hierraus frequenz output compare registers
   OCR2B = round(duty_mag*time_mag/100L); //hierraus frequency output compare registers
-  led_on();
+  led_off();
   OCR1A = round(time_led); //Hierraus frequenz output compare registers
   OCR1B = round(duty_led*time_led/100L); //hierraus frequency output compare registers
   
@@ -81,14 +100,47 @@ void setup() {
 }
 
 void loop() {
+  // Change mode when push button is pushed, don't do anything else until PB is released
+  if (pbReleased && digitalRead(pbInputPin) == HIGH) //Read in switch
+  {
+    pbReleased = false;
+    mode += 1;
+    if (mode >= 4) mode = 1; //rotary menu
+    mode_changed = 1;
+    delay(100);
+  }
+  else if (!pbReleased && digitalRead(pbInputPin) == LOW)
+  {
+    pbReleased = true;
+  }
+
+  if (mode == 3)
+  {
+    if (mode_changed == 1)
+    { 
+      mag_off(); //mode = 3
+      led_off(); //mode = 3
+      mode_changed = 0;
+    }//mode = 3
+    
+    float currentbrightness = millis()/10000.0;
+    int value = (pbLedMaxDuty * 3.0/4) + pbLedMaxDuty * sin( currentbrightness * 2.0 * PI );
+    if (value < 0) 
+      value = 0;
+    analogWrite(pbLedPin, value);
+  }
   //Read in trimmer settings
-  phase_shift = -(MAX_PHASE_SHIFT-MIN_PHASE_SHIFT)/1023L*analogRead(A1)+MAX_PHASE_SHIFT; //Speed: 0.1 .. 5 Hz
+  //Speed: 0.0 .. -2.0 Hz (negative because I think the effect is better when the led phase is behind the mag phase)
+  phase_shift = (MAX_PHASE_SHIFT-MIN_PHASE_SHIFT)/1023L*analogRead(A1)-MAX_PHASE_SHIFT; 
   delay(3);
   duty_led = -(MAX_BRIGHTNESS-MIN_BRIGHTNESS)/1023L*analogRead(A0)+MAX_BRIGHTNESS;  //Brightness: duty_led 2..20
+  delay(3);
+  duty_mag = -(MAX_STRENGTH-MIN_STRENGTH)/1023L*analogRead(A2)+MAX_STRENGTH;  //Electromagnet strength: duty_mag 10..20
   frequency_led = frequency_mag*mode+phase_shift;
     
   if ((mode == 1) && (mode_changed == 1))
-  {   
+  {
+    analogWrite(pbLedPin, pbLedMaxDuty / 4.0);
     frequency_mag = BASE_FREQ;
     mag_on();
     led_on();
@@ -99,16 +151,6 @@ void loop() {
     //frequency doubleing already done in main loop
     mode_changed = 0;
   }//mode = 2 
-  if ((mode == 3) && (mode_changed == 1))
-  { 
-    mag_off(); //mode = 2
-    mode_changed = 0;
-  }//mode = 3 
-  if ((mode == 4) && (mode_changed == 1))
-  {
-    led_off(); //mode = 4
-    mode_changed = 0;
-  }//mode = 4 
 
   time_mag = round(16000000L/1024L/frequency_mag); 
   time_led = round(16000000L/8L/frequency_led);
@@ -117,14 +159,6 @@ void loop() {
   OCR2B = round(duty_mag*time_mag/100L); 
   OCR1A = round(time_led); 
   OCR1B = round(duty_led*time_led/100L);
-
-  if (digitalRead(SW) == HIGH) //Read in switch
-  {
-    mode += 1;
-    if (mode >= 5) mode = 1; //rotary menu
-    delay(400); //400ms debounce
-    mode_changed = 1;
-  }
 
 #ifdef DEBUG
  //Heatbeat on-board LED
