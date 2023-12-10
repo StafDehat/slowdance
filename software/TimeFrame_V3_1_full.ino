@@ -32,19 +32,31 @@
 //uncomment to check serial monitor and see LED heartbeat
 //Tactile Switch needs to be pressed longer in debug mode to change mode
 
+// Arduino Nano has CPU speed 16 MHz
+#define CPU_FREQ 16000000L
+
 //Base frequency and trimmer Ranges
 #define BASE_FREQ 80.0 //80 is on the spot for many flowers. Feel free to play with this +/-5Hz
 #define MIN_PHASE_SHIFT 0.25
 #define MAX_PHASE_SHIFT 2.0
+
 #define MIN_BRIGHTNESS 0.0 // allows light to be off to reveal the full oscillating effect
 #define MAX_BRIGHTNESS 20.0 // too high and flickering will occur
+
 #define MIN_STRENGTH 5.0 //  too low no movement
 #define MAX_STRENGTH 25.0 // too high and magnet will overheat
   
+/**The microprocessor of the Arduino UNO (ATmega328P) has 3 timers:
+  timer0 (8 bits) counts from 0 to 256 and controls the PWM of pins 5 and 6. It is also used by the delay(), millis() and micros() functions.
+  timer1 (16 bits) counts from 0 to 65535 and is used for the PWM control of pins 9 and 10. It is also used by the Servo.h library
+  timer2 (8 bits) which is used by the Tone() function and the PWM generation on pins 3 and 11.
+  https://www.aranacorp.com/en/using-the-arduino-timers/
+**/
 #define ledPin 10
-#define oscPin 3
+#define magPin 3
 #define pbLedPin 5
 #define pbInputPin 6
+
 
   const float pbLedMaxDuty = 64.0;
   const int LED = 13; //on board LED
@@ -62,14 +74,16 @@
   //PIN 3
   float duty_mag = 15; //12 be carefull not overheat the magnet. better adjust force through magnet position
   float frequency_mag = BASE_FREQ;
-  long time_mag = round(16000000/1024/frequency_mag); 
+  // 1024 is the prescaler value, set via bitmask when we define register TCCR2B
+  long time_mag = round(CPU_FREQ/1024/frequency_mag);
 
   //Timer 1 for LED 
   //Prescaler = 8 = CS010 = 0.5 us/tick
   //PIN 9
   float duty_led = 7;
-  float frequency_led = frequency_mag+phase_shift; 
-  long time_led = round(16000000/8/frequency_led);
+  float frequency_led = frequency_mag+phase_shift;
+  // 8 is the prescaler value, set via bitmask when we define register TCCR1B
+  long time_led = round(CPU_FREQ/8/frequency_led);
   
 void setup() {
   Serial.begin(9600);
@@ -81,7 +95,7 @@ void setup() {
   pinMode(LED, OUTPUT); //Power button LED (pulsates slowly when off)
   pinMode(pbInputPin, INPUT); //button pin
   pinMode(A1, INPUT); // beat frequency
-  pinMode(oscPin, OUTPUT); //MAG: Timer 2B cycle output
+  pinMode(magPin, OUTPUT); //MAG: Timer 2B cycle output
   pinMode(ledPin, OUTPUT); //LED: Timer 1B cycle output 
 
   #ifdef DEBUG
@@ -90,11 +104,11 @@ void setup() {
   #endif
 
   mag_off();
-  OCR2A = round(time_mag); //Hierraus frequenz output compare registers
-  OCR2B = round(duty_mag*time_mag/100L); //hierraus frequency output compare registers
+  OCR2A = round(time_mag); // Timer2 overflows when it reaches OCR2A.  Hence, this sets the frequency.
+  OCR2B = round(duty_mag*time_mag/100L); // This sets the duty cycle... somehow.
   led_off();
   OCR1A = round(time_led); //Hierraus frequenz output compare registers
-  OCR1B = round(duty_led*time_led/100L); //hierraus frequency output compare registers
+  OCR1B = round(duty_led*time_led/100L); // This sets the duty cycle... somehow.
   
   sei();
 }
@@ -152,8 +166,8 @@ void loop() {
     mode_changed = 0;
   }//mode = 2 
 
-  time_mag = round(16000000L/1024L/frequency_mag); 
-  time_led = round(16000000L/8L/frequency_led);
+  time_mag = round(CPU_FREQ/1024L/frequency_mag); 
+  time_led = round(CPU_FREQ/8L/frequency_led);
 
   OCR2A = round(time_mag); //to calculate frequency of output compare registers
   OCR2B = round(duty_mag*time_mag/100L); 
@@ -182,11 +196,36 @@ void loop() {
 #endif
 } //main loop
 
+// https://www.tutorialspoint.com/timer-registers-in-arduino
+// https://www.aranacorp.com/en/using-the-arduino-timers/
+// https://docs.arduino.cc/tutorials/generic/secrets-of-arduino-pwm
 void mag_on() {
   TCCR2A = 0;
   TCCR2B = 0;
-  TCCR2A = _BV(COM2A0) | _BV(COM2B1) | _BV(WGM21) | _BV(WGM20);
-  TCCR2B = _BV(WGM22) | _BV(CS22)| _BV(CS21)| _BV(CS20);
+
+  // Waveform mode 7
+  // FastPWM
+  //   * Count from 0-OCR2A (mode 3 would go 0-255)
+  //   * Update OCRx at BOTTOM, TOV flag set at TOP
+  //TCCR2A = _BV(COM2A0) | _BV(COM2B1) | _BV(WGM21) | _BV(WGM20); // 0110 0011
+  //TCCR2B = _BV(WGM22) | _BV(CS22)| _BV(CS21)| _BV(CS20); // 0000 1111
+
+  // Set to waveform mode 7, FastPWM
+  // "Fast PWM Mode with OCRA top"
+  // Ref: https://docs.arduino.cc/tutorials/generic/secrets-of-arduino-pwm
+  TCCR2A |= _BV(WGM21) | _BV(WGM20);
+  TCCR2B |= _BV(WGM22);
+
+  // Set prescaler to 0x111 (/1024 for Timer2):
+  TCCR2B |= _BV(CS22)| _BV(CS21)| _BV(CS20);
+
+  // ????
+  // 00 = 
+  // 01 = Toggle on Compare Match
+  // 10 = Non-inverted PWM
+  // 11 = 
+  // COM2A=01, COM2B=10
+  TCCR2A |= _BV(COM2A0) | _BV(COM2B1);
 }
 
 void mag_off() {
