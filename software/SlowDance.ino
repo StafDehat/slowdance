@@ -34,9 +34,10 @@ Pins:
 #include <Arduino.h>
 #include "Adafruit_Debounce.h"
 #include <BasicEncoder.h>
-#include <TM1637Display.h>
+#include "TM1637Display.h"
 
-#define DEBUG
+// Uncomment to get debug data in serial console
+//#define DEBUG
 
 #define CPU_FREQ 16000000L // Arduino Nano
 //#define CPU_FREQ 8000000L // Adafruit Trinket 3v
@@ -51,8 +52,8 @@ Pins:
 #define MIN_FREQ  7000 // 70.00 Hz
 #define MAX_FREQ  9000 // 90.00 Hz
 
-#define BASE_PHASE_SHIFT 50  // 0.50 Hz
-#define MIN_PHASE_SHIFT  0   // 0.00 Hz
+#define BASE_PHASE_SHIFT 0  // 0.00 Hz
+#define MIN_PHASE_SHIFT  -500   // -5.00 Hz
 #define MAX_PHASE_SHIFT  500 // 5.00 Hz
 
 #define BASE_BRIGHTNESS 5   // 0.05 (5%) duty cycle
@@ -165,6 +166,8 @@ void setup() {
   setMode(0);
 
   sei(); // Enable interrupts
+
+  Serial.println("Ready");
 }
 
 void loop() {
@@ -173,10 +176,7 @@ void loop() {
   // must be called ~every 10ms to keep state and catch presses 
   encoderBtn.update();
   if (encoderBtn.justPressed()) {
-    Serial.println("Button was just pressed!");
     switchModes();
-  } else if (encoderBtn.justReleased()) {
-    Serial.println("Button was just released!");
   }
 
   int encoder_change = encoder.get_change();
@@ -196,23 +196,6 @@ void loop() {
   // Add a small debouncing delay
   delay(10);
 
-/**
-  #ifdef DEBUG
-    Serial.print("T(s)=");
-    Serial.println(round(millis()/1000));
-    Serial.print("  magDuty:        ");
-    Serial.println(magDuty);
-    Serial.print("  magFreqNom(Hz):    ");
-    Serial.println(magFreqNom);
-    Serial.print("  phaseShift(Hz): ");
-    Serial.println(phaseShift);
-    Serial.print("  ledDuty(%):     ");
-    Serial.println(ledDuty);
-    Serial.print("  OCR2A: ");
-    Serial.println(OCR2A);
-    delay(1000);
-  #endif
-  **/
 } //main loop
 
 
@@ -251,26 +234,31 @@ void wake() {
 
 
 void updateDisplay() {
+  #ifdef DEBUG
+    Serial.println("Current settings:");
+    Serial.print("Mode:                         ");
+    Serial.println(currentMode);
+    Serial.print("Vibrational frequency (Hz):   ");
+    Serial.println(magFreqNom/100.0);
+    Serial.print("Phase shift (Hz):             ");
+    Serial.println(phaseShift/100.0);
+    Serial.print("Electromagnet duty cycle (%): ");
+    Serial.println(magDuty);
+    Serial.print("LED duty/brightness (%):      ");
+    Serial.println(ledDuty);
+  #endif
   display.clear();
   switch(currentMode) {
     case 0: // Vibration frequency (Hz, 70.00-90.00, 8000=80.00)
-      Serial.print("Vibrational frequency (Hz): ");
-      Serial.println(magFreqNom/100.0);
       display.showNumberDecEx(magFreqNom, 0b01000000, false, 4, 0);
       break;
     case 1: // Phase shift (Hz, 0.00-5.00, 1=0.01)
-      Serial.print("Phase shift (Hz): ");
-      Serial.println(phaseShift/100.0);
       display.showNumberDecEx(phaseShift/10, 0b10000000, true, 2, 1);
       break;
     case 2: // Magnet duty (%, 0.05-0.30)
-      Serial.print("Electromagnet duty cycle (%): ");
-      Serial.println(magDuty);
       display.showNumberDecEx(magDuty, 0b10000000, true, 3, 1);
       break;
     case 3: // LED Brightness (duty) (%, 0.0-0.20)
-      Serial.print("LED duty/brightness (%): ");
-      Serial.println(ledDuty);
       display.showNumberDecEx(ledDuty, 0b10000000, true, 3, 1);
       break;
   } // END switch
@@ -335,10 +323,10 @@ void updateSettings(int encoder_change) {
 void change_mag_freq(int8_t steps) {
   int newFreq = magFreqNom + steps*25; // Every step is 25% (ie: 25, since magFreqNom is hundredths)
   if ( newFreq > MAX_FREQ ) {
-    Serial.println("Max frequency exceeded");
+    //Serial.println("Max frequency exceeded");
     newFreq = MAX_FREQ;
   } else if ( newFreq < MIN_FREQ ) {
-    Serial.println("Min frequency exceeded");
+    //Serial.println("Min frequency exceeded");
     newFreq = MIN_FREQ;
   }
   set_mag_freq(newFreq);
@@ -347,7 +335,7 @@ void change_mag_freq(int8_t steps) {
 }
 // Mode 2 - Phase shift
 void change_phase_shift(int8_t steps) {
-  // It's confusing as hell in code, but to the end-user it's easier if we
+  // It's confusing in code, but to the end-user it's easier if we
   //   always refer to phaseShift as a positive value.  However, you get better
   //   visuals if the light blinks a hair slower than the vibration Hz, so we
   //   subtract the phaseShift from magFreq to get ledFreq.  Technically the
@@ -357,23 +345,28 @@ void change_phase_shift(int8_t steps) {
   //   & ledFreq, but it's adjustable by tenths.  So, steps*10 here.
   int newShift = phaseShift + steps*10;
   if ( newShift > MAX_PHASE_SHIFT ) {
-    Serial.println("Max phase shift exceeded");
+    //Serial.println("Max phase shift exceeded");
     newShift = MAX_PHASE_SHIFT;
   } else if ( newShift < MIN_PHASE_SHIFT ) {
-    Serial.println("Min phase shift exceeded");
+    //Serial.println("Min phase shift exceeded");
     newShift = MIN_PHASE_SHIFT;
   }
   phaseShift = newShift;
-  set_led_freq(magFreqActual-phaseShift);
+  if (phaseShift < 0) {
+    // When phaseShift is negative, it's applied to 2x magFreq
+    set_led_freq( magFreqActual*2 + phaseShift );
+  } else {
+    set_led_freq(magFreqActual-phaseShift);
+  }
 }
 // Mode 3 - Magnet duty cycle (strength)
 void change_mag_duty(int8_t steps) {
   int8_t newDuty = magDuty+steps;
   if ( newDuty > MAX_MAG_DUTY ) {
-    Serial.println("Max magnet duty exceeded");
+    //Serial.println("Max magnet duty exceeded");
     newDuty = MAX_MAG_DUTY;
   } else if ( newDuty < MIN_MAG_DUTY ) {
-    Serial.println("Min magnet duty exceeded");
+    //Serial.println("Min magnet duty exceeded");
     newDuty = MIN_MAG_DUTY;
   }
   set_mag_duty(newDuty);
@@ -382,14 +375,12 @@ void change_mag_duty(int8_t steps) {
 void change_led_duty(int8_t steps) {
   int8_t newDuty = ledDuty+steps;
   if ( newDuty > MAX_BRIGHTNESS ) {
-    Serial.println("Max LED duty/brightness exceeded");
+    //Serial.println("Max LED duty/brightness exceeded");
     newDuty = MAX_BRIGHTNESS;
   } else if ( newDuty < MIN_BRIGHTNESS ) {
-    Serial.println("Min LED duty/brightness exceeded");
+    //Serial.println("Min LED duty/brightness exceeded");
     newDuty = MIN_BRIGHTNESS;
   }
-  Serial.print("Setting LED duty = ");
-  Serial.println(newDuty);
   set_led_duty(newDuty);
 }
 
@@ -505,8 +496,6 @@ void mag_off() {
 }
 
 void set_mag_freq(int f) {
-  Serial.print("In set_mag_freq, f=");
-  Serial.println(f);
   // 1s has 16-million CPU ticks, since Arduino Nano has a 16MHz CPU.
   // We set Timer2's Prescaler to 1024 in mag_on(), so TCNT2 increments
   //   once every 1024 CPU ticks.  (16mil/1024=15,625 tps)
@@ -533,6 +522,8 @@ void set_mag_freq(int f) {
   //   phaseShift error of +/- 0.3Hz!
   magFreqActual = round(15625/(OCR2A+1.0)*100);
   #ifdef DEBUG
+    Serial.print("In set_mag_freq, f=");
+    Serial.println(f);
     Serial.print("OCR2A:");
     Serial.println(OCR2A);
     Serial.print("magFreqActual: ");
@@ -543,15 +534,17 @@ void set_mag_freq(int f) {
 }
 
 void set_mag_duty(uint8_t p) {
-  Serial.print("In set_mag_duty, p=");
-  Serial.println(p);
   // magPin turns HI at 0, and LO when TCNT==OCR2B,
   //  then cycles back to 0 (HI) when TCNT==OCR2A.
   // Set OCR2B=p% of the way from 0 to OCR2A.
   // Note: 50% duty cycle would be set_mag_duty(0.50);
   magDuty = p; // Remember it for later
-  Serial.print("Setting OCR2B = ");
-  Serial.println(round(p/100.0 * (OCR2A+1) - 1));
+  #ifdef DEBUG
+    Serial.print("In set_mag_duty, p=");
+    Serial.println(p);
+    Serial.print("Setting OCR2B = ");
+    Serial.println(round(p/100.0 * (OCR2A+1) - 1));
+  #endif
   OCR2B = round(p/100.0 * (OCR2A+1) - 1);
 
 }
@@ -601,8 +594,6 @@ void led_off() {
 }
 
 void set_led_freq(int f) {
-  Serial.print("In set_led_freq.  f=");
-  Serial.println(f);
   // 1s has 16-million CPU ticks, since Arduino Nano has a 16MHz CPU.
   // We set Timer1's Prescaler to 8 in led_on(), so TCNT1 increments
   //   once every 8 CPU ticks.  (16mil/8=2mil tps)
@@ -619,6 +610,10 @@ void set_led_freq(int f) {
   //   duty cycle.  Lower frequency means more duty-cycle granularity.
   ledFreq = f;
   OCR1A = round(2000000/(f/100.0))-1;
+  #ifdef DEBUG
+    Serial.print("In set_led_freq.  f=");
+    Serial.println(f);
+  #endif
   // LED duty is a percentage of ledFreq.  Since Freq changed, update Duty too.
   set_led_duty(ledDuty);
 }
@@ -629,6 +624,10 @@ void set_led_duty(uint8_t p) {
   // Set OCR1B=p% of the way from 0 to OCR1A.
   // Note: 50% duty cycle would be set_led_duty(50);
   ledDuty = p;
+  #ifdef DEBUG
+    Serial.print("In set_led_duty.  p=");
+    Serial.println(p);
+  #endif
   if ( ledDuty == 0 ) {
     led_off();
     return;
